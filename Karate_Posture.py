@@ -6,7 +6,6 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
-
 # Loads input image for processing.
 def load_input_image(image_path):
     input_bgr = cv2.imread(image_path)
