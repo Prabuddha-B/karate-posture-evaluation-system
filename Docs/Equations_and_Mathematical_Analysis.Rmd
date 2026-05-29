@@ -1,0 +1,383 @@
+---
+title: "Equations and Mathematical Analysis"
+author: "Karate Posture Evaluation System — Documentation"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+# Equations and Mathematical Analysis
+
+This document collects and explains, in precise mathematical form, every
+calculation used in the `Karate_Posture.py` pipeline. Each metric is
+presented with: purpose, equation(s), immediate variable definitions,
+and example interpretation suitable for inclusion in the project report.
+
+The equation numbers are sequential and referenced in-text. Symbols are
+defined immediately after each equation.
+
+------------------------------------------------------------------------
+
+# 1. Stance Width
+
+## Purpose
+
+Measures the Euclidean distance between the detected left and right foot
+positions in image pixel coordinates. This raw distance is used as the
+primary measure of how wide a subject's stance is.
+
+## Equation
+
+$$D = \sqrt{(x_2 - x_1)^2 + (y_2 - y_1)^2} \tag{1}$$
+
+Where: - $D$ = stance width (pixels). - $(x_1, y_1)$ = coordinates of
+the left foot (image pixel coordinates, origin at top-left). -
+$(x_2, y_2)$ = coordinates of the right foot (image pixel coordinates,
+origin at top-left).
+
+## Interpretation
+
+Higher $D$ indicates a wider stance. This raw measure is directly
+comparable between images only when the subject scale (silhouette
+height) is similar; otherwise normalization is required.
+
+------------------------------------------------------------------------
+
+# 2. Normalized Stance Width
+
+## Purpose
+
+Removes scale dependence by normalizing the stance width by the
+silhouette height of the detected subject. This enables comparison
+across images of different scales.
+
+## Equation
+
+$$W_{norm} = \frac{D}{H} \tag{2}$$
+
+Where: - $W_{norm}$ = normalized stance width (dimensionless). - $D$ =
+stance width from Equation (1) (pixels). - $H$ = silhouette height
+(pixels), computed as described in Equation (3).
+
+## Interpretation
+
+A larger $W_{norm}$ indicates a relatively wider stance when scaled by
+subject height. Values are unitless and comparable between images.
+
+------------------------------------------------------------------------
+
+# 3. Silhouette Height
+
+## Purpose
+
+Computes the height of the detected silhouette mask used for
+normalization of other features.
+
+## Equation
+
+$$H = y_{bottom} - y_{top} \tag{3}$$
+
+Where: - $H$ = silhouette height (pixels). -
+$y_{top} = \min\{y\,|\, (x,y)\in S\}$ is the smallest row index
+containing silhouette pixels. - $y_{bottom} = \max\{y\,|\, (x,y)\in S\}$
+is the largest row index containing silhouette pixels. - $S$ denotes the
+set of pixel coordinates belonging to the silhouette mask.
+
+## Interpretation
+
+$H$ is the number of vertical pixels spanning the detected silhouette
+and is used as a scale reference.
+
+------------------------------------------------------------------------
+
+# 4. Leg Spread Angle — Vector Dot Product (cosine form)
+
+## Purpose
+
+Computes the included angle at the pelvis between vectors to the left
+and right feet. This measures how far the legs are spread relative to
+the pelvis.
+
+## Equation (cosine of angle)
+
+$$\cos(\theta) = \frac{(\mathbf{v}_L \cdot \mathbf{v}_R)}{\|\mathbf{v}_L\|\,\|\mathbf{v}_R\|} \tag{4}$$
+
+Where: - $\theta$ = leg spread angle (radians). -
+$\mathbf{v}_L = (x_L - x_P,\; y_L - y_P)$ = vector from pelvis to left
+foot. - $\mathbf{v}_R = (x_R - x_P,\; y_R - y_P)$ = vector from pelvis
+to right foot. - $\cdot$ denotes the Euclidean dot product. -
+$\|\cdot\|$ denotes the Euclidean norm (vector length). - $(x_P,y_P)$ =
+pelvis center coordinates. - $(x_L,y_L)$ = left foot coordinates. -
+$(x_R,y_R)$ = right foot coordinates.
+
+## Equation (angle)
+
+$$\theta = \arccos\big(\cos(\theta)\big) = \arccos\left(\frac{(\mathbf{v}_L \cdot \mathbf{v}_R)}{\|\mathbf{v}_L\|\,\|\mathbf{v}_R\|}\right) \tag{5}$$
+
+Since the code reports angles in degrees, the conversion is:
+
+$$\theta_{deg} = \theta \times \frac{180}{\pi} \tag{6}$$
+
+Where: - $\theta_{deg}$ = leg spread angle in degrees.
+
+## Interpretation
+
+A larger $\theta_{deg}$ indicates that the legs are spread further apart
+relative to the pelvis. Values near $0^\circ$ indicate nearly parallel
+legs; values near $180^\circ$ indicate legs pointing in opposite
+directions.
+
+------------------------------------------------------------------------
+
+# 5. Pelvis Lateral Offset
+
+## Purpose
+
+Measures lateral (horizontal) displacement of the pelvis relative to the
+midpoint of the two feet. This quantifies left/right imbalance.
+
+## Midpoint Equation
+
+$$x_{mid} = \frac{x_L + x_R}{2} \tag{7}$$
+
+Where: - $x_{mid}$ = horizontal midpoint between the two feet
+(pixels). - $x_L, x_R$ = x-coordinates of left and right foot (pixels).
+
+## Offset Equation
+
+$$O = |x_P - x_{mid}| \tag{8}$$
+
+Where: - $O$ = pelvis lateral offset (pixels). - $x_P$ = pelvis
+x-coordinate (pixels). - $|\cdot|$ denotes the absolute value.
+
+## Normalized Offset (used in comparisons)
+
+Often the offset is normalized by silhouette height $H$ to obtain a
+scale-invariant measure:
+
+$$O_{norm} = \frac{O}{H} \tag{9}$$
+
+Where: - $O_{norm}$ = normalized pelvis lateral offset (dimensionless).
+
+## Interpretation
+
+Small $O$ (or $O_{norm}$) indicates pelvis centered between the feet.
+Larger values indicate lateral displacement and potential imbalance.
+
+------------------------------------------------------------------------
+
+# 6. Support Triangle Area
+
+## Purpose
+
+Computes the area of the triangle formed by the pelvis and the two feet
+(support triangle). A normalized version of this area indicates the
+relative stability base.
+
+## Exact Geometric Area (Heron/cross-product formula)
+
+Using the shoelace determinant form for coordinates
+$(x_1,y_1),(x_2,y_2),(x_3,y_3)$:
+
+$$A = \frac{1}{2}\left| x_1(y_2 - y_3) + x_2(y_3 - y_1) + x_3(y_1 - y_2) \right| \tag{10}$$
+
+Where: - $A$ = area of the triangle (square pixels). - $(x_1,y_1)$ =
+pelvis point $(x_P,y_P)$. - $(x_2,y_2)$ = left foot $(x_L,y_L)$. -
+$(x_3,y_3)$ = right foot $(x_R,y_R)$.
+
+## Normalized Support Triangle Area
+
+The implementation normalizes the area by the square of silhouette
+height to obtain a dimensionless stability-related measure:
+
+$$A_{norm} = \frac{A}{H^2} \tag{11}$$
+
+Where: - $A_{norm}$ = normalized support triangle area
+(dimensionless). - $H$ = silhouette height from Equation (3).
+
+## Interpretation
+
+Larger $A_{norm}$ suggests a larger support base relative to subject
+height and generally indicates greater static stability; smaller values
+indicate a narrow or unstable base.
+
+------------------------------------------------------------------------
+
+# 7. Pelvis Height Ratio
+
+## Purpose
+
+Measures vertical placement of the pelvis relative to the silhouette top
+and bottom; used to detect stance depth and posture height.
+
+## Equation
+
+$$R_P = \frac{y_P - y_{top}}{H} \tag{12}$$
+
+Where: - $R_P$ = pelvis height ratio (dimensionless, between 0 and 1 in
+proper detections). - $y_P$ = pelvis y-coordinate (pixels), larger
+values are lower in the image (image y-axis points down). - $y_{top}$ =
+top of silhouette (pixels) as defined in Equation (3). - $H$ =
+silhouette height (pixels) from Equation (3).
+
+## Interpretation
+
+Values closer to $1$ place the pelvis lower in the silhouette (near the
+bottom of the silhouette); values closer to $0$ place the pelvis near
+the top. Typical human silhouettes will yield $R_P$ within a
+characteristic range depending on posture.
+
+------------------------------------------------------------------------
+
+# 8. Leg Symmetry Ratio
+
+## Purpose
+
+Provides a ratio of the Euclidean distances from pelvis to each foot,
+indicating left-right limb length or stance asymmetry relative to the
+pelvis.
+
+## Equation
+
+$$S = \frac{\|\mathbf{v}_L\|}{\|\mathbf{v}_R\|} = \frac{\sqrt{(x_L-x_P)^2 + (y_L-y_P)^2}}{\sqrt{(x_R-x_P)^2 + (y_R-y_P)^2}} \tag{13}$$
+
+Where: - $S$ = leg symmetry ratio (dimensionless). - $\|\mathbf{v}_L\|$
+= Euclidean distance pelvis-to-left-foot (pixels). - $\|\mathbf{v}_R\|$
+= Euclidean distance pelvis-to-right-foot (pixels). - Variables as
+defined previously.
+
+## Interpretation
+
+A value near $1.0$ indicates approximate left-right symmetry. Values
+$>1$ indicate the left leg is farther from the pelvis than the right;
+values $<1$ indicate the opposite.
+
+------------------------------------------------------------------------
+
+# 9. Stability Index
+
+## Purpose
+
+Aggregates normalized deviations across multiple metrics into a single
+percentage stability index in the range $[0,100]$. The formula follows
+the implementation in `compute_stability_index()` and uses per-metric
+thresholds and weights.
+
+The procedure is: 1. For each metric $i$ compute the signed difference
+$d_i$ between user and reference (or appropriate baseline). The specific
+metrics included are: - stance width ($d_{stance}$) - leg spread
+($d_{leg}$) - pelvis offset ($d_{offset}$) - support triangle area
+($d_{area}$) - pelvis height ($d_{pelvis}$) - leg symmetry ($d_{sym}$)
+
+2.  For each metric $i$ with threshold $T_i > 0$ compute a bounded
+    penalty:
+
+$$p_i = \min\left( \frac{|d_i|}{T_i},\; 1 \right) \tag{14}$$
+
+Where: - $p_i$ = penalty for metric $i$, in $[0,1]$. - $d_i$ = signed
+difference for metric $i$ (user minus reference), as used in code. -
+$T_i$ = threshold for the metric (see Table 1 below).
+
+3.  Multiply by weights $w_i$ and sum to obtain a weighted penalty:
+
+$$P_{w} = \sum_{i} w_i\,p_i \tag{15}$$
+
+Where: - $P_w$ = weighted penalty (non-negative). - $w_i$ = weight for
+metric $i$; weights are chosen in code and sum to $1.0$.
+
+4.  Compute stability index as a percentage:
+
+$$SI = 100\times\left(1 - \frac{P_w}{\sum_i w_i}\right) \tag{16}$$
+
+In the implementation the denominator $\sum_i w_i$ is the total weight
+(typically $1.0$) but the code explicitly divides by the total weight
+for numerical safety.
+
+Where: - $SI$ = Stability Index (percentage between $0$ and $100$). The
+code also clamps this value to $[0,100]$.
+
+### Table 1 — Thresholds and Weights (as implemented)
+
+The implementation uses the following thresholds $T_i$ and weights
+$w_i$:
+
+- $T_{stance} = 0.25$ (normalized stance width)
+- $T_{leg} = 25.0$ (degrees)
+- $T_{offset} = 35.0$ (units consistent with how offset is computed —
+  see code usage)
+- $T_{area} = 0.18$ (normalized area)
+- $T_{pelvis} = 0.18$ (pelvis height ratio)
+- $T_{sym} = 0.25$ (leg symmetry ratio deviation)
+
+Weights: - $w_{stance} = 0.20$ - $w_{leg} = 0.20$ -
+$w_{offset} = 0.15$ - $w_{area} = 0.15$ - $w_{pelvis} = 0.15$ -
+$w_{sym} = 0.15$
+
+### Final classification
+
+After computing $SI$, the implementation assigns qualitative status
+using `evaluate_stability_index()`: - $SI \ge 80$: Good ("Stable stance
+posture") - $60 \le SI < 80$: Warning ("Moderate posture instability") -
+$SI < 60$: Critical ("Poor stance stability")
+
+## Interpretation
+
+$SI$ near $100$ indicates that the user's stance closely matches the
+reference across the weighted metrics. Lower $SI$ indicates larger
+deviations on the metrics, with the weights controlling relative
+importance.
+
+------------------------------------------------------------------------
+
+# 10. Additional Notes on Numerical and Geometric Conventions
+
+- Coordinate system: pixel coordinates are used with origin $(0,0)$ at
+  the top-left of the image. The $x$ axis grows to the right and the $y$
+  axis grows downward. Distance calculations use Euclidean geometry in
+  pixel space.
+
+- Angle conventions: the computed angle from Equation (5) is in radians;
+  the implementation converts to degrees (Equation (6)) for
+  human-readable reporting.
+
+- Normalizations: whenever the code divides by silhouette height $H$, it
+  guards against division by zero. In practice, $H$ must be a positive
+  integer for valid normalization.
+
+- If a silhouette or contours are not detected, many metrics are set to
+  NaN or zero as handled by the existing pipeline; the documentation
+  above assumes valid silhouette extraction.
+
+------------------------------------------------------------------------
+
+# 11. Example Interpretations (concise)
+
+- $W_{norm}$ (Equation 2): values lower than the reference indicate a
+  narrower stance; positive differences (user minus reference) indicate
+  wider stance.
+
+- $\theta_{deg}$ (Equation 6): a difference of $>25^\circ$ from the
+  reference is treated as a significant deviation in the code
+  ("Critical" threshold for leg spread comparisons).
+
+- $A_{norm}$ (Equation 11): smaller values indicate a smaller relative
+  support base; differences larger than $0.18$ are flagged as critical
+  by the implementation.
+
+- $SI$ (Equation 16): the composite measure used to rank overall stance
+  stability; use the numeric thresholds above for qualitative labels.
+
+------------------------------------------------------------------------
+
+# References
+
+- Standard vector geometry and dot-product definitions for angle
+  computation.
+- Shoelace formula (determinant form) for triangle area.
+
+*This document was generated from the explicit computational steps
+implemented in `Karate_Posture.py`.*

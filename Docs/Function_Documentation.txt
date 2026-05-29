@@ -1,0 +1,972 @@
+====================================================
+Function Name:
+load_input_image()
+====================================================
+Purpose:
+Loads an image from disk into memory for processing and returns a working copy. It centralizes image I/O and handles a missing-file error.
+
+Inputs:
+- image_path : str — Path to the image file on disk.
+
+Outputs:
+- input_bgr : ndarray (H x W x 3) — OpenCV BGR image read from disk.
+- input_bgr_copy : ndarray (H x W x 3) — A copy of the loaded image (preserves original pixels).
+
+Algorithm Summary:
+1. Call `cv2.imread(image_path)` to read the image in BGR format.
+2. If the image could not be read (None), raise a ValueError with the image path.
+3. Return the loaded image and a copy for safe manipulation.
+
+Used In:
+- `run_analysis()` main processing pipeline.
+
+Example:
+- Called at the start of analysis to obtain the raw image for segmentation and visualization.
+
+====================================================
+Function Name:
+get_reference_path()
+====================================================
+Purpose:
+Builds the expected filename for a WKF reference stance and returns its filesystem path. Ensures consistent naming between reference images and code.
+
+Inputs:
+- stance_name : str — Canonical stance identifier (e.g., "han_zenkutsu_dachi_front").
+- ref_dir : str — Directory containing reference stance images.
+
+Outputs:
+- ref_path : str — Full path to the expected reference image file (REF_{stance}.png).
+
+Algorithm Summary:
+1. Construct filename with the prefix `REF_` followed by the stance name and `.png` extension.
+2. Join `ref_dir` and filename using `os.path.join` to produce a platform-safe path.
+
+Used In:
+- `main()` when locating the reference image for comparison.
+
+Example:
+- Input `stance_name='heiko_dachi'`, `ref_dir='Reference Stances'` → returns 'Reference Stances/REF_heiko_dachi.png'.
+
+====================================================
+Function Name:
+enhance_image()
+====================================================
+Purpose:
+Improve local contrast using CLAHE (Contrast Limited Adaptive Histogram Equalization) in LAB color space to make silhouette extraction more robust under varying lighting.
+
+Inputs:
+- input_bgr : ndarray — BGR image to be enhanced.
+- clip_limit : float (optional) — CLAHE clip limit (default 1.2).
+- tile_grid : tuple (optional) — CLAHE tile size (default (8,8)).
+
+Outputs:
+- enhanced_bgr : ndarray — Contrast-enhanced BGR image.
+
+Algorithm Summary:
+1. Convert the BGR image to LAB color space using `cv2.cvtColor`.
+2. Split into L, A, B channels.
+3. Create a CLAHE object with `clipLimit` and `tileGridSize`.
+4. Apply CLAHE to the L channel to enhance local contrast.
+5. Merge channels and convert back to BGR.
+
+Used In:
+- `run_analysis()` as part of preprocessing before thresholding and silhouette extraction.
+
+Example:
+- Applied to images with uneven illumination to emphasize body boundaries.
+
+====================================================
+Function Name:
+remove_mat_colors()
+====================================================
+Purpose:
+Remove red and blue tatami/mat colors commonly present in karate images, reducing background interference for binary segmentation.
+
+Inputs:
+- input_bgr : ndarray — BGR image read from disk.
+
+Outputs:
+- cleaned_bgr : ndarray — BGR image with red/blue mat regions masked out.
+- cleaned_rgb : ndarray — RGB version of the cleaned image for plotting (converted to RGB ordering).
+
+Algorithm Summary:
+1. Convert the input image to HSV color space using `cv2.cvtColor`.
+2. Define HSV color ranges for red (two ranges to cover hue wrap-around) and blue.
+3. Use `cv2.inRange` to build binary masks for red and blue pixels.
+4. Combine masks to form `full_mask` of tatami colors, then invert it to create `inv_mask`.
+5. Bitwise-and the original BGR image with the inverted mask to remove mat colors.
+6. Convert the cleaned BGR image to RGB for visualization.
+
+Used In:
+- `run_analysis()` before enhancement and thresholding to prevent the mat colors from being segmented as foreground.
+
+Example:
+- Removes a red or blue gym floor region that would otherwise be mistaken as part of the silhouette.
+
+Why it exists / How it contributes:
+- Background mat colors often have high saturation and can create false positives in thresholding. Removing these colors reduces noise and improves silhouette accuracy.
+
+====================================================
+Function Name:
+compute_roi()
+====================================================
+Purpose:
+Extract the lower-body region of interest (ROI) from the frame by slicing off the top portion; this focuses processing on the legs and feet and reduces computation and false positives.
+
+Inputs:
+- input_bgr : ndarray — BGR image after color cleaning/enhancement.
+- roi_ratio : float (optional) — Fraction of image height to skip from the top (default 0.45).
+
+Outputs:
+- gray_full : ndarray — Full-image grayscale conversion.
+- gray_roi : ndarray — Grayscale image slice containing the lower-body ROI.
+- roi_bgr : ndarray — BGR slice containing the lower-body ROI.
+- roi_y : int — Vertical pixel offset where ROI begins (row index).
+
+Algorithm Summary:
+1. Convert the input BGR image to grayscale using `cv2.cvtColor`.
+2. Compute `roi_y` as `int(height * roi_ratio)` to determine the starting row for the lower-body ROI.
+3. Slice `gray_full` and `input_bgr` vertically from `roi_y` to the bottom to obtain `gray_roi` and `roi_bgr`.
+4. Return the full grayscale image, ROI grayscale, ROI BGR, and the ROI vertical offset.
+
+Used In:
+- `run_analysis()` to limit thresholding and contour extraction to the lower body where feet/pelvis geometry is expected.
+
+Example:
+- With `roi_ratio=0.45` on a 1000px tall image, ROI starts at row 450 and focuses on the lower 550 pixels.
+
+Why it exists / How it contributes:
+- Reduces noise from upper-body and background and concentrates processing on features relevant to stance evaluation (feet and pelvis).
+
+====================================================
+Function Name:
+denoise_images()
+====================================================
+Purpose:
+Reduce high-frequency noise in grayscale images using Gaussian blurring to improve thresholding stability.
+
+Inputs:
+- gray_full : ndarray — Full-frame grayscale image.
+- gray_roi : ndarray — Lower-body ROI grayscale image.
+
+Outputs:
+- blurred_full : ndarray — Blurred full-frame grayscale.
+- blurred_roi : ndarray — Blurred ROI grayscale.
+
+Algorithm Summary:
+1. Apply `cv2.GaussianBlur` with a small kernel (5x5) to both `gray_full` and `gray_roi`.
+2. Return the blurred images.
+
+Used In:
+- `run_analysis()` before Otsu thresholding to smooth noise and small texture variations.
+
+Why it exists / How it contributes:
+- Blurring reduces spurious small-scale intensity changes which helps Otsu threshold find a cleaner bimodal separation between foreground and background.
+
+====================================================
+Function Name:
+otsu_threshold()
+====================================================
+Purpose:
+Binarize blurred grayscale images using Otsu's automatic threshold selection to separate foreground (body) from background.
+
+Inputs:
+- blurred_full : ndarray — Blurred full-frame grayscale image.
+- blurred_roi : ndarray — Blurred ROI grayscale image.
+
+Outputs:
+- binary_full : ndarray — Binary mask of full-frame foreground/background.
+- binary_roi : ndarray — Binary mask of the ROI.
+
+Algorithm Summary:
+1. Call `cv2.threshold` with `cv2.THRESH_BINARY + cv2.THRESH_OTSU` on the blurred images.
+2. Return the resulting binary masks for full-frame and ROI.
+
+Used In:
+- `run_analysis()` to create initial binary masks for morphological cleaning and silhouette generation.
+
+Why it exists / How it contributes:
+- Otsu's method chooses a threshold automatically based on image histogram, which simplifies parameter tuning and adapts to different lighting conditions.
+
+====================================================
+Function Name:
+clean_masks()
+====================================================
+Purpose:
+Apply morphological operations to the binary masks to close small holes and remove small spurious components, producing cleaner regions for silhouette extraction.
+
+Inputs:
+- binary_full : ndarray — Binary mask of the full image.
+- binary_roi : ndarray — Binary mask of the ROI.
+
+Outputs:
+- clean_full : ndarray — Cleaned full-image binary mask.
+- clean_roi : ndarray — Cleaned ROI binary mask.
+
+Algorithm Summary:
+1. Define a small square kernel (3x3) for morphological operations.
+2. For the ROI mask: perform `MORPH_CLOSE` with 2 iterations then `MORPH_OPEN` with 1 iteration to close holes and remove noise.
+3. For the full mask: perform the same sequence of closing then opening.
+4. Return the cleaned masks.
+
+Used In:
+- `run_analysis()` to produce masks that are suitable for connected component analysis and contour extraction.
+
+Why it exists / How it contributes:
+- Morphological cleanup reduces fragmentation of the subject silhouette and reduces the number of small components that could confuse contour analysis.
+
+====================================================
+Function Name:
+build_silhouette()
+====================================================
+Purpose:
+Produce a single, robust silhouette mask by further morphological closing and connected-component filtering to remove very small components while retaining the main body region.
+
+Inputs:
+- clean_roi : ndarray — Binary mask of the cleaned ROI (after morphological operations).
+
+Outputs:
+- silhouette_mask : ndarray — Final silhouette mask for downstream geometry extraction.
+
+Algorithm Summary:
+1. Copy `clean_roi` to `silhouette_mask`.
+2. Apply a larger morphological closing (kernel 7x7, 3 iterations) to merge adjacent regions and fill holes.
+3. Use `cv2.connectedComponentsWithStats` to obtain labeled components and stats.
+4. If more than one label is present, compute a minimum area threshold (`0.002 * silhouette_mask.size`) and keep only components with area >= threshold.
+5. Return the filtered silhouette mask.
+
+Used In:
+- `run_analysis()` to create the binary mask that defines the subject silhouette used for pelvis and foot detection.
+
+Why it exists / How it contributes:
+- Ensures the silhouette is a single contiguous region representing the subject's lower body, which is necessary for accurate geometry extraction.
+
+====================================================
+Function Name:
+extract_contours()
+====================================================
+Purpose:
+Extract external contours from the silhouette mask and provide a cleaned contour mask suitable for visualization and diagnostics.
+
+Inputs:
+- silhouette_mask : ndarray — Binary silhouette mask.
+
+Outputs:
+- contour_mask : ndarray — Cleaned binary mask used to extract contours.
+- contours : list of ndarray — External contours found in the mask (list of point arrays).
+
+Algorithm Summary:
+1. If the mask background is white at (0,0), invert the silhouette to ensure foreground is white.
+2. Find connected components and, if multiple, filter out small components using a minimum area threshold similar to `build_silhouette()`.
+3. Use `cv2.findContours` with `RETR_EXTERNAL` and `CHAIN_APPROX_SIMPLE` to retrieve external contours.
+4. Return the cleaned contour mask and contour list.
+
+Used In:
+- `run_analysis()` to obtain contours for visualization and to verify that a valid silhouette was detected.
+
+Why it exists / How it contributes:
+- Contours provide a geometrical representation of the silhouette boundary that can be used for drawing and debugging.
+
+====================================================
+Function Name:
+find_pelvis_center()
+====================================================
+Purpose:
+Estimate the pelvis center by scanning the top rows of the silhouette for the first row that contains foreground pixels and computing the mean x-coordinate of that row.
+
+Inputs:
+- silhouette_mask : ndarray — Binary silhouette mask (ROI coordinates).
+- roi_y : int — Vertical offset used to map ROI coordinates to full-image coordinates.
+
+Outputs:
+- pelvis_point : tuple (x_P, y_P) — Pelvis center in full-image coordinates.
+- waist_x : int — Pelvis x-coordinate in ROI coordinate space (useful for left/right splitting).
+
+Algorithm Summary:
+1. Compute coordinates of all silhouette pixels. If none exist, raise an error.
+2. Iterate over rows from top to bottom: for the first row containing foreground pixels, compute `waist_x` as the average x-index of foreground pixels in that row; set `waist_y` to that row index.
+3. Convert to full-image coordinates by adding `roi_y` to the row index and return `(waist_x, waist_y + roi_y)` and `waist_x`.
+
+Used In:
+- `run_analysis()` to find the pelvis position, which is a central node for subsequent geometry computations (angles, distances, triangle area).
+
+Why it exists / How it contributes:
+- The pelvis is used as the reference point for leg vectors and support base calculations; estimating it from the first occupied row approximates the waist/pelvis location in a silhouette.
+
+====================================================
+Function Name:
+detect_feet()
+====================================================
+Purpose:
+Locate approximate left and right foot points by splitting silhouette pixels around the pelvis x-coordinate and identifying bottom-most candidate pixels for each side.
+
+Inputs:
+- silhouette_mask : ndarray — Binary silhouette mask (ROI coordinates).
+- waist_x : int — Pelvis x-coordinate in ROI coordinates.
+- roi_y : int — Vertical offset to convert ROI coordinates to full-image coordinates.
+
+Outputs:
+- left_foot_point_full : tuple (x_L, y_L) — Left foot coordinates in full-image coordinates.
+- right_foot_point_full : tuple (x_R, y_R) — Right foot coordinates in full-image coordinates.
+
+Algorithm Summary:
+1. Extract arrays of pixel coordinates where the mask is foreground (ys, xs).
+2. Split points into left (`xs < waist_x`) and right (`xs > waist_x`) sets to separate limbs.
+3. For each side, find the maximum y (bottom-most) and take a small horizontal band (last 10 pixels) as candidates.
+4. For the left foot, choose the candidate with minimum x (left-most) in that bottom band; for the right foot, choose the candidate with maximum x (right-most).
+5. Convert chosen coordinates to full-image coordinates by adding `roi_y` to the y-values and return both foot points.
+
+Used In:
+- `run_analysis()` to compute stance width, leg vectors, and support triangle geometry.
+
+Why it exists / How it contributes:
+- Detecting feet positions is critical because foot coordinates define the support base and allow angle/distance based metrics to be computed.
+
+====================================================
+Function Name:
+draw_contours()
+====================================================
+Purpose:
+Overlay extracted contours on the original RGB image for diagnostic visualization of geometry extraction.
+
+Inputs:
+- input_rgb_raw : ndarray — Original RGB image (unchanged copy for annotations).
+- contours : list — Contours detected in ROI coordinates.
+- roi_y : int — Vertical offset to map contour coordinates to full-image coordinates.
+
+Outputs:
+- contour_output : ndarray — RGB image with contours drawn in green and thick lines.
+
+Algorithm Summary:
+1. Copy the raw RGB image to avoid modifying the original.
+2. Convert each contour's y-coordinate by adding `roi_y` so contours align with the full image.
+3. Use `cv2.drawContours` to draw all contours on the copy with a green color and thickness of 4 pixels.
+4. Return the annotated image.
+
+Used In:
+- `run_analysis()` and visualization functions to show detected contour boundaries.
+
+Why it exists / How it contributes:
+- Visual overlays assist in verifying whether contour extraction and ROI mapping are correct during testing and demonstration.
+
+====================================================
+Function Name:
+draw_stance_output()
+====================================================
+Purpose:
+Draw stance geometry (pelvis, feet, connecting lines) and textual annotations on the image for final posture visualization and reporting.
+
+Inputs:
+- input_rgb_raw : ndarray — Original RGB image.
+- center_node : tuple — Pelvis coordinates in full-image coordinates.
+- left_foot_point_full : tuple — Left foot coordinates (full image).
+- right_foot_point_full : tuple — Right foot coordinates (full image).
+- stance_width : float — Computed stance width (pixels).
+
+Outputs:
+- stance_output : ndarray — RGB image annotated with nodes, lines and textual labels.
+
+Algorithm Summary:
+1. Copy the original RGB image.
+2. Draw circles for pelvis and foot points with a distinct color.
+3. Put text labels "Left Foot", "Right Foot", and "Center of Mass" at appropriate positions.
+4. Draw connecting lines between pelvis and feet and between the feet to depict the support base.
+5. Render stance width text at the top-left area.
+6. Return the annotated image.
+
+Used In:
+- `run_analysis()` output and `show_template_figure()` for user-facing visualization and saved reports.
+
+Why it exists / How it contributes:
+- Provides an intuitive visual summary of the geometric measurements and helps the user understand the computed metrics.
+
+====================================================
+Function Name:
+show_plots()
+====================================================
+Purpose:
+Display a multi-panel diagnostic figure showing input, cleaned, enhanced, thresholded, and contour images to help visually assess each pipeline stage.
+
+Inputs:
+- input_rgb_raw, input_rgb, enhanced_rgb : ndarray — Various RGB images at different stages.
+- gray_roi : ndarray — ROI grayscale image.
+- binary_mask, clean_mask, contour_mask : ndarray — Binary masks from thresholding and cleaning.
+- contour_output : ndarray — Contour overlay image.
+- stance_output : ndarray — Annotated stance output image.
+- has_contours : bool — Indicator whether contours were found.
+
+Outputs:
+- None (displays a Matplotlib figure window with several subplots).
+
+Algorithm Summary:
+1. Create a Matplotlib figure with 2x4 subplots sized for diagnostic display.
+2. For each subplot, call `plt.imshow` on the provided image and set a title describing the step.
+3. Turn off axes for clarity and call `plt.tight_layout()` and `plt.show()` to display.
+
+Used In:
+- `main()` after `run_analysis()` to present diagnostic figures to the user.
+
+Why it exists / How it contributes:
+- Helps in debugging and demonstration by showing how the image evolves through the pipeline, revealing failures in color removal, thresholding, or contour extraction.
+
+====================================================
+Function Name:
+draw_metrics_table()
+====================================================
+Purpose:
+Render a formatted metrics comparison table (reference vs. user) inside a Matplotlib axis for the final report/figure.
+
+Inputs:
+- ax : Matplotlib axis object — Axis where the table will be drawn.
+- metrics_data : list of dict — List of metric rows; each dict contains feature, reference, user, difference, status, feedback.
+
+Outputs:
+- None (draws table on the supplied axis).
+
+Algorithm Summary:
+1. Prepare headers and row data by extracting required fields from `metrics_data`.
+2. Create a Matplotlib table with `ax.table`, set font sizes, scale, and bold header row.
+3. Color the status cell based on status categories and highlight the stability index row.
+4. Do not return the axis (modifies the supplied axis in-place).
+
+Used In:
+- `show_template_figure()` and `save_evaluation_report()` to render the metrics comparison table.
+
+Why it exists / How it contributes:
+- Produces a clean, human-readable summary of metric comparisons and feedback that is included in saved PNG reports and on-screen figures.
+
+====================================================
+Function Name:
+calculate_leg_spread_angle()
+====================================================
+Purpose:
+Compute the angle formed at the pelvis between vectors to left and right feet — a key measure of leg spread.
+
+Inputs:
+- pelvis_point : tuple — Pelvis coordinates (x_P, y_P).
+- left_foot_point : tuple — Left foot coordinates (x_L, y_L).
+- right_foot_point : tuple — Right foot coordinates (x_R, y_R).
+
+Outputs:
+- angle_degrees : float — Leg spread angle in degrees.
+
+Algorithm Summary:
+1. Convert points to NumPy float arrays and form vectors `v_L = left - pelvis` and `v_R = right - pelvis`.
+2. Compute norms of both vectors; if either is zero return 0.0 to avoid division by zero.
+3. Compute cosine of angle using dot product divided by product of norms.
+4. Clip cosine to [-1,1] and compute `arccos` to get radians.
+5. Convert radians to degrees and return.
+
+Used In:
+- `main()` during reference vs user comparison, and `batch_evaluation.py` when computing per-image metrics.
+
+Why it exists / How it contributes:
+- The included angle quantifies how open or closed the legs are relative to the pelvis, which is significant for stance correctness.
+
+====================================================
+Function Name:
+calculate_silhouette_height()
+====================================================
+Purpose:
+Measure the vertical span of the silhouette mask to produce a scale reference for normalization.
+
+Inputs:
+- silhouette_mask : ndarray — Binary mask where foreground pixels belong to the silhouette.
+
+Outputs:
+- height : int — Height of the silhouette in pixels (non-negative).
+
+Algorithm Summary:
+1. Extract coordinates (ys, xs) of foreground pixels.
+2. If empty, return 0.
+3. Compute `top_y = min(ys)` and `bottom_y = max(ys)`.
+4. Return `max(bottom_y - top_y, 0)`.
+
+Used In:
+- `run_analysis()`, metric normalization, and `batch_evaluation.py`.
+
+Why it exists / How it contributes:
+- Provides a robust scale factor for normalizing distances and areas so metrics are comparable across images.
+
+====================================================
+Function Name:
+compute_pelvis_height_ratio()
+====================================================
+Purpose:
+Compute the vertical position of the pelvis relative to the silhouette top and bottom, producing a normalized ratio.
+
+Inputs:
+- pelvis_point : tuple — Pelvis coordinates (x_P, y_P).
+- silhouette_mask : ndarray — Binary silhouette mask.
+
+Outputs:
+- pelvis_ratio : float — Ratio in [0,1] (when valid) describing pelvis vertical placement.
+
+Algorithm Summary:
+1. Extract silhouette pixel y-coordinates and find `top_y` and `bottom_y`.
+2. Compute `height = bottom_y - top_y`. If `height <= 0` return 0.0.
+3. Return `(y_P - top_y) / height` as a float.
+
+Used In:
+- `main()` for comparing reference vs user pelvis vertical placement.
+
+Why it exists / How it contributes:
+- Allows detection of whether the pelvis is positioned higher or lower in the silhouette compared to a reference stance.
+
+====================================================
+Function Name:
+compare_stance_width()
+====================================================
+Purpose:
+Compare user's stance width with reference stance after normalizing by silhouette heights, produce a difference, status label, and textual feedback.
+
+Inputs:
+- ref_width : float — Reference stance width (pixels).
+- user_width : float — User stance width (pixels).
+- ref_height : int — Reference silhouette height (pixels).
+- user_height : int — User silhouette height (pixels).
+
+Outputs:
+- metrics_row : dict — Dictionary containing feature name, reference value, user value, difference, status, and feedback.
+
+Algorithm Summary:
+1. Compute normalized widths `ref_norm = ref_width / ref_height` and `user_norm = user_width / user_height`, guarding against division by zero.
+2. Compute `diff = user_norm - ref_norm` and percentage difference `percent_diff` relative to `ref_norm`.
+3. Assign status: Good if percent_diff <= 10, Warning if <=25, otherwise Critical.
+4. Provide textual feedback based on whether user's width is narrower or wider.
+5. Return a dict summarizing the comparison.
+
+Used In:
+- `main()` to populate `metrics_data` for the final report.
+
+Why it exists / How it contributes:
+- Automates the decision logic to interpret numeric deviation into qualitative feedback that is included in the evaluation table.
+
+====================================================
+Function Name:
+compare_leg_spread_angle()
+====================================================
+Purpose:
+Compare leg spread angles between reference and user, produce difference, status, and feedback.
+
+Inputs:
+- ref_angle : float — Reference leg spread angle (degrees).
+- user_angle : float — User leg spread angle (degrees).
+
+Outputs:
+- metrics_row : dict — Dictionary describing the feature comparison and feedback.
+
+Algorithm Summary:
+1. Compute signed difference `diff = user_angle - ref_angle` and absolute difference.
+2. Assign status thresholds: Good if abs_diff <= 10°, Warning if <= 25°, Critical otherwise.
+3. Provide feedback text indicating whether to increase or reduce leg spread.
+4. Return the metric dictionary.
+
+Used In:
+- `main()` for reference comparison and report generation.
+
+Why it exists / How it contributes:
+- Converts an angle difference into a human-readable assessment used in the evaluation report.
+
+====================================================
+Function Name:
+compute_pelvis_lateral_offset()
+====================================================
+Purpose:
+Compute horizontal distance between pelvis x-coordinate and midpoint of feet x-coordinates (lateral offset).
+
+Inputs:
+- pelvis_point : tuple — Pelvis coordinates (x_P, y_P).
+- left_foot_point : tuple — Left foot coordinates (x_L, y_L).
+- right_foot_point : tuple — Right foot coordinates (x_R, y_R).
+
+Outputs:
+- offset : float — Absolute horizontal offset in pixels.
+
+Algorithm Summary:
+1. Compute midpoint `x_mid = (x_L + x_R) / 2`.
+2. Return `abs(x_P - x_mid)`.
+
+Used In:
+- `main()` comparisons and `batch_evaluation.py` metric calculations.
+
+Why it exists / How it contributes:
+- Quantifies lateral balance by measuring pelvis displacement relative to the foot base.
+
+====================================================
+Function Name:
+evaluate_pelvis_offset()
+====================================================
+Purpose:
+Convert a raw pelvis offset difference into a status and feedback row for the metrics table.
+
+Inputs:
+- reference_offset : float — Reference offset.
+- user_offset : float — User offset.
+
+Outputs:
+- metrics_row : dict — Contains feature name, reference, user, difference, status, feedback.
+
+Algorithm Summary:
+1. Compute `diff = user_offset - reference_offset` and `abs_diff = abs(diff)`.
+2. Use threshold bounds (<=15 Good, <=35 Warning, else Critical) to pick a status.
+3. Generate appropriate feedback text.
+4. Return a dictionary row summarizing the comparison.
+
+Used In:
+- `main()` for building `metrics_data`.
+
+Why it exists / How it contributes:
+- Interprets numeric lateral offset differences into actionable feedback for the user.
+
+====================================================
+Function Name:
+compute_support_triangle_area()
+====================================================
+Purpose:
+Compute the area of the triangle formed by pelvis and both feet and normalize it by silhouette height squared.
+
+Inputs:
+- pelvis_point : tuple — Pelvis coordinates (x_P,y_P).
+- left_foot_point : tuple — Left foot coordinates (x_L,y_L).
+- right_foot_point : tuple — Right foot coordinates (x_R,y_R).
+- silhouette_height : float — Height of silhouette H (pixels).
+
+Outputs:
+- area_norm : float — Normalized triangle area (dimensionless).
+
+Algorithm Summary:
+1. Compute the raw triangle area using the determinant/shoelace formula: A = 0.5 * abs(x1(y2-y3)+x2(y3-y1)+x3(y1-y2)).
+2. If `silhouette_height <= 0`, return 0.0 to avoid division by zero.
+3. Normalize area by `H^2`: return `A / (H**2)`.
+
+Used In:
+- `main()` and `batch_evaluation.py` where a normalized support area is compared between reference and user.
+
+Why it exists / How it contributes:
+- The support triangle area correlates with base of support; normalizing by height makes the metric comparable across different image scales.
+
+====================================================
+Function Name:
+evaluate_support_triangle_area()
+====================================================
+Purpose:
+Compare normalized support triangle area between reference and user and provide status/feedback.
+
+Inputs:
+- reference_area : float — Reference normalized area.
+- user_area : float — User normalized area.
+
+Outputs:
+- metrics_row : dict — Summary row for metrics table.
+
+Algorithm Summary:
+1. Compute `diff = user_area - reference_area` and `abs_diff`.
+2. Thresholds: Good if abs_diff <= 0.08, Warning if <=0.18, else Critical.
+3. Provide textual feedback corresponding to stability implications.
+4. Return the metric dictionary.
+
+Used In:
+- `main()` metrics assembly and reporting.
+
+Why it exists / How it contributes:
+- Translates geometric area differences into qualitative stability feedback for the end user.
+
+====================================================
+Function Name:
+evaluate_pelvis_height_ratio()
+====================================================
+Purpose:
+Compare pelvis height ratio (normalized vertical position) between reference and user and return a metrics row.
+
+Inputs:
+- reference_ratio : float — Reference pelvis ratio.
+- user_ratio : float — User pelvis ratio.
+
+Outputs:
+- metrics_row : dict — Dictionary with comparison results and feedback.
+
+Algorithm Summary:
+1. Compute `diff = user_ratio - reference_ratio` and `abs_diff`.
+2. Thresholds: Good if abs_diff <= 0.08, Warning if <= 0.18, else Critical.
+3. Provide textual feedback and return the row.
+
+Used In:
+- `main()` when assembling comparison table.
+
+Why it exists / How it contributes:
+- Indicates whether the pelvis vertical position deviates from the reference stance in a way that might change posture quality.
+
+====================================================
+Function Name:
+compute_leg_symmetry_ratio()
+====================================================
+Purpose:
+Compute ratio of distances from pelvis to left and right foot to measure left-right symmetry.
+
+Inputs:
+- pelvis_point : tuple — Pelvis coordinates.
+- left_foot_point : tuple — Left foot coordinates.
+- right_foot_point : tuple — Right foot coordinates.
+
+Outputs:
+- symmetry_ratio : float — Ratio left_distance / right_distance.
+
+Algorithm Summary:
+1. Compute Euclidean distances from pelvis to left foot and pelvis to right foot using `np.linalg.norm`.
+2. If `right_dist` is zero, return 0.0 (avoid division by zero).
+3. Return `left_dist / right_dist`.
+
+Used In:
+- `main()` comparisons and `batch_evaluation.py` metrics collection.
+
+Why it exists / How it contributes:
+- Captures asymmetries in stance distribution that may indicate weight shifts or incorrect foot placement.
+
+====================================================
+Function Name:
+evaluate_leg_symmetry_ratio()
+====================================================
+Purpose:
+Compare computed leg symmetry ratio against reference and convert deviation into status and feedback.
+
+Inputs:
+- reference_ratio : float — Reference symmetry ratio.
+- user_ratio : float — User symmetry ratio.
+
+Outputs:
+- metrics_row : dict — Comparison result ready for inclusion in the metrics table.
+
+Algorithm Summary:
+1. Compute `symmetry_deviation = abs(1 - (user_ratio / reference_ratio))` if `reference_ratio != 0`; else treat deviation as 0.0.
+2. Thresholds: Good if deviation <= 0.20, Warning if <=0.40, else Critical.
+3. Return dictionary with textual guidance.
+
+Used In:
+- `main()` constructing the final `metrics_data`.
+
+Why it exists / How it contributes:
+- Provides a normalized measure of how balanced the left and right legs are relative to the reference stance.
+
+====================================================
+Function Name:
+compute_stability_index()
+====================================================
+Purpose:
+Aggregate multiple normalized metric differences into a single percentage stability score between 0 and 100.
+
+Inputs:
+- metrics_dictionary : dict — Contains signed differences for keys: 'stance_width', 'leg_spread', 'pelvis_offset', 'triangle_area', 'pelvis_height', 'leg_symmetry'. Each value is the user minus reference difference used by the scoring.
+
+Outputs:
+- stability_index : float — Value in [0,100] representing composite stability.
+
+Algorithm Summary:
+1. Define per-metric thresholds and weights (hard-coded in the function).
+2. For each metric compute a penalty `penalty = min(abs(diff) / threshold, 1.0)`.
+3. Compute weighted penalty `weighted_penalty += penalty * weight` and accumulate total weights.
+4. Compute `stability_index = 100.0 * (1.0 - (weighted_penalty / total_weight))` and clamp to [0,100].
+5. Return the final index.
+
+Used In:
+- `main()` to compute composite stability and included in `metrics_data`.
+
+Why it exists / How it contributes:
+- Provides a single, interpretable score to summarize multiple geometric deviations into overall stance quality.
+
+====================================================
+Function Name:
+evaluate_stability_index()
+====================================================
+Purpose:
+Convert a numeric `stability_index` into qualitative status and feedback for presentation in the metrics table.
+
+Inputs:
+- stability_index : float — Numeric stability score in percent.
+
+Outputs:
+- metrics_row : dict — Entry describing the stability index, reference (100%), user value, difference, status, and feedback.
+
+Algorithm Summary:
+1. Classify: Good if SI >= 80, Warning if SI >= 60, else Critical.
+2. Provide corresponding textual feedback.
+3. Return a dict representing the stability metric row.
+
+Used In:
+- `main()` to append final stability assessment to `metrics_data`.
+
+Why it exists / How it contributes:
+- Bridges numeric stability measurement and human-understandable evaluation categories used in reports and feedback.
+
+====================================================
+Function Name:
+show_template_figure()
+====================================================
+Purpose:
+Display a composed figure with the reference image, the user image and a metrics table for a complete side-by-side comparison.
+
+Inputs:
+- ref_rgb : ndarray — Reference image RGB for display.
+- user_rgb : ndarray — User image RGB for display.
+- stance_label : str — Human-readable stance name.
+- metrics_data : list — Metrics dictionary rows to render in the table.
+
+Outputs:
+- None (shows Matplotlib figure with images and table).
+
+Algorithm Summary:
+1. Create a figure with grid layout (two image panels and a table panel).
+2. Resize images to a common height to present them side-by-side.
+3. Display reference and user images with titles, draw the metrics table via `draw_metrics_table`, and set figure title.
+4. Call `plt.show()`.
+
+Used In:
+- `main()` after computing `metrics_data`, and `save_evaluation_report()` uses similar code to save the figure.
+
+Why it exists / How it contributes:
+- Delivers a clear visual and tabular summary for the user or examiner to assess posture differences.
+
+====================================================
+Function Name:
+save_evaluation_report()
+====================================================
+Purpose:
+Save the same composed template figure (reference, user, metrics) to disk as a PNG file for record-keeping.
+
+Inputs:
+- stance_name : str — Stance label (used in filename and figure text).
+- ref_rgb : ndarray — Reference image for display.
+- user_rgb : ndarray — User image for display.
+- metrics_data : list — Metrics rows to include in the table.
+- out_dir : str (optional) — Output directory where the PNG will be written. Defaults to current working directory.
+
+Outputs:
+- out_path : str or None — Full path to saved PNG if successful; None on failure.
+
+Algorithm Summary:
+1. Prepare `out_dir` and a Matplotlib figure with the same layout as `show_template_figure()`.
+2. Resize images to common height and draw them with titles.
+3. Draw the metrics table using `draw_metrics_table()`.
+4. Compose a timestamped, safe filename and call `fig.savefig(out_path, dpi=150, bbox_inches='tight')`.
+5. Close the figure and return the saved path; on any exception, close figures and return None.
+
+Used In:
+- `main()` to save an evaluation report after comparison.
+
+Why it exists / How it contributes:
+- Produces a permanent visual artifact of the evaluation suitable for submission, grading, or user records.
+
+====================================================
+Function Name:
+run_analysis()
+====================================================
+Purpose:
+Execute the complete image processing pipeline for a single image and return a dictionary of computed geometric outputs, visualization images, and masks.
+
+Inputs:
+- image_path : str — Path to the image to analyze.
+- stance_name : str — Stance identifier (passed through but not used for image processing itself).
+
+Outputs:
+- result : dict — Contains many keys, including:
+    - 'stance_name', 'stance_width', 'center_node', 'left_foot', 'right_foot',
+    - 'stance_output', 'contour_output', 'contour_mask', 'silhouette_mask',
+    - 'silhouette_height', 'input_rgb', 'enhanced_rgb', 'input_rgb_raw',
+    - 'gray_roi', 'binary_mask', 'clean_mask', 'has_contours'
+
+Algorithm Summary:
+1. Load image via `load_input_image`.
+2. Remove mat colors and enhance the image.
+3. Convert and prepare ROI, blur and threshold images.
+4. Clean masks and build silhouette.
+5. Extract contours and compute silhouette height.
+6. If contours exist: draw contours and compute pelvis center, detect feet, compute stance width, and draw stance annotation.
+7. Return a dictionary containing intermediate and final results for downstream comparison and visualization.
+
+Used In:
+- `main()` for single-image analysis and `batch_evaluation.py` for batch metrics extraction.
+
+Why it exists / How it contributes:
+- Encapsulates the full detection pipeline in a single function so that batch and single runs can reuse the same processing code and outputs.
+
+====================================================
+Function Name:
+parse_args()
+====================================================
+Purpose:
+Parse command-line arguments for the script, including optional image path, stance name, and reference directory.
+
+Inputs:
+- None (reads from `sys.argv` internally via `argparse`).
+
+Outputs:
+- args : argparse.Namespace — Parsed arguments with attributes `image`, `stance`, and `ref_dir`.
+
+Algorithm Summary:
+1. Create an `ArgumentParser`.
+2. Add `--image`, `--stance` (with allowed choices), and `--ref-dir` arguments.
+3. Return `parser.parse_args()`.
+
+Used In:
+- `main()` to obtain user inputs for non-interactive usage.
+
+Why it exists / How it contributes:
+- Allows the script to be run non-interactively (suitable for batch or automated runs) and supports overriding the reference directory.
+
+====================================================
+Function Name:
+prompt_if_missing()
+====================================================
+Purpose:
+Interactively prompt the user for missing `--image` or `--stance` arguments when the script is run without required options.
+
+Inputs:
+- args : argparse.Namespace — Parsed arguments from `parse_args()`.
+
+Outputs:
+- (image_path, stance_name) : Tuple[str, str] — Finalized inputs, validated for use in the pipeline.
+
+Algorithm Summary:
+1. If `args.image` is present use it; otherwise prompt the user for an image path and strip quotes.
+2. If `args.stance` is present use it; otherwise present a numeric menu of stances and map the choice to a canonical stance string.
+3. Validate that the resolved `stance_name` is one of allowed values; otherwise raise a ValueError.
+4. Return `image_path` and `stance_name`.
+
+Used In:
+- `main()` to support both interactive and non-interactive invocation.
+
+Why it exists / How it contributes:
+- Provides a convenient interactive fallback for users running the script manually, ensuring required inputs are obtained.
+
+====================================================
+Function Name:
+main()
+====================================================
+Purpose:
+Program entry point that orchestrates argument parsing, running analysis on the user image and reference, visualizing results, computing comparisons, saving a report, and showing the final template figure.
+
+Inputs:
+- None directly (uses `parse_args()` and optionally interactive prompts).
+
+Outputs:
+- None (prints saved report path and displays figures; writes PNG reports when possible).
+
+Algorithm Summary:
+1. Parse arguments and prompt for missing values.
+2. Run `run_analysis()` on the user image.
+3. Display diagnostic plots via `show_plots()`.
+4. Determine `ref_dir` (CLI override or project-relative folder) and locate the reference image.
+5. Attempt to `run_analysis()` on the reference image if present; warn and fall back if missing.
+6. If both user and reference analyses contain contours, compute the suite of comparison metrics using the compare/evaluate functions.
+7. Compute the `stability_index` using `compute_stability_index()` and append its evaluation.
+8. Save an evaluation report PNG via `save_evaluation_report()` and display the comparison figure with `show_template_figure()`.
+
+Used In:
+- Invoked when `Karate_Posture.py` is executed as a script (`if __name__ == '__main__': main()`).
+
+Why it exists / How it contributes:
+- Orchestrates the entire user workflow, ties together processing, comparison, visualization, and report generation for a complete user-facing evaluation.
+
+====================================================
+
+End of function documentation for `Karate_Posture.py`.
