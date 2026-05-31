@@ -1,3 +1,4 @@
+# Importing relevant Libraries
 import argparse
 import os
 from datetime import datetime
@@ -6,7 +7,7 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Loads input image for processing.
+# Loads input image for processing
 def load_input_image(image_path):
     input_bgr = cv2.imread(image_path)
     if input_bgr is None:
@@ -30,7 +31,7 @@ def enhance_image(input_bgr, clip_limit=1.2, tile_grid=(8, 8)):
     return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
 
 
-# Removes red/blue mat colors from the input image.
+# Removes red/blue mat colors from the input image (Color Image Segmentation)
 def remove_mat_colors(input_bgr):
     hsv = cv2.cvtColor(input_bgr, cv2.COLOR_BGR2HSV)
 
@@ -56,7 +57,7 @@ def remove_mat_colors(input_bgr):
     return input_bgr, input_rgb
 
 
-# Computes full-frame grayscale and lower-body ROI slices.
+# Computes full-frame grayscale and lower-body ROI slices
 def compute_roi(input_bgr, roi_ratio=0.45):
     gray_full = cv2.cvtColor(input_bgr, cv2.COLOR_BGR2GRAY)
     height_full = gray_full.shape[0]
@@ -66,14 +67,14 @@ def compute_roi(input_bgr, roi_ratio=0.45):
     return gray_full, gray_roi, roi_bgr, roi_y
 
 
-# Applies Gaussian blur for noise reduction.
+# Applies Gaussian blur for noise reduction
 def denoise_images(gray_full, gray_roi):
     blurred_full = cv2.GaussianBlur(gray_full, (5, 5), 0)
     blurred_roi = cv2.GaussianBlur(gray_roi, (5, 5), 0)
     return blurred_full, blurred_roi
 
 
-# Performs Otsu thresholding without inversion.
+# Performs Otsu thresholding without inversion
 def otsu_threshold(blurred_full, blurred_roi):
     _, binary_full = cv2.threshold(
         blurred_full,
@@ -92,7 +93,7 @@ def otsu_threshold(blurred_full, blurred_roi):
     return binary_full, binary_roi
 
 
-# Cleans the binary masks with morphological operations.
+# Cleans the binary masks with morphological operations
 def clean_masks(binary_full, binary_roi):
     kernel_small = np.ones((3, 3), np.uint8)
 
@@ -127,7 +128,7 @@ def clean_masks(binary_full, binary_roi):
     return clean_full, clean_roi
 
 
-# Builds the silhouette mask from the cleaned ROI mask.
+# Builds the silhouette mask from the cleaned ROI mask
 def build_silhouette(clean_roi):
     silhouette_mask = clean_roi.copy()
     kernel_large = np.ones((7, 7), np.uint8)
@@ -143,6 +144,7 @@ def build_silhouette(clean_roi):
         silhouette_mask,
         connectivity=8
     )
+    # Remove Small Blobs and keep only relevant parts
     if num_labels > 1:
         min_component_area = int(0.002 * silhouette_mask.size)
         cleaned_mask = np.zeros_like(silhouette_mask)
@@ -154,7 +156,7 @@ def build_silhouette(clean_roi):
     return silhouette_mask
 
 
-# Extracts a cleaned contour mask and external contours.
+# Extracts a cleaned contour mask and external contours
 def extract_contours(silhouette_mask):
     if silhouette_mask[0, 0] == 255:
         contour_mask = cv2.bitwise_not(silhouette_mask)
@@ -182,7 +184,7 @@ def extract_contours(silhouette_mask):
     return contour_mask, contours
 
 
-# Finds pelvis center using the first body row in the silhouette.
+# Finds pelvis center using the first body row in the silhouette
 def find_pelvis_center(silhouette_mask, roi_y):
     mask_points = np.column_stack(
         np.where(silhouette_mask > 0)
@@ -204,12 +206,13 @@ def find_pelvis_center(silhouette_mask, roi_y):
     return (waist_x, waist_y + roi_y), waist_x
 
 
-# Detects left/right foot points separately using bottom bands.
+# Detects left/right foot points separately using bottom most pixels
 def detect_feet(silhouette_mask, waist_x, roi_y):
     ys, xs = np.where(silhouette_mask > 0)
     if len(xs) == 0:
         raise ValueError("ERROR: No silhouette pixels found.")
 
+    # Split into left and Right
     left_mask = xs < waist_x
     right_mask = xs > waist_x
 
@@ -257,7 +260,7 @@ def detect_feet(silhouette_mask, waist_x, roi_y):
     return left_foot_point_full, right_foot_point_full
 
 
-# Draws contour overlays on the original image.
+# Draws contour overlays on the original image
 def draw_contours(input_rgb_raw, contours, roi_y):
     contour_output = input_rgb_raw.copy()
     contours_full = []
@@ -277,7 +280,7 @@ def draw_contours(input_rgb_raw, contours, roi_y):
     return contour_output
 
 
-# Draws stance geometry and annotations on the output image.
+# Draws stance geometry and annotations on the output image
 def draw_stance_output(
     input_rgb_raw,
     center_node,
@@ -340,7 +343,7 @@ def draw_stance_output(
     return stance_output
 
 
-# Shows diagnostic and final stance visualizations.
+# Shows diagnostic and final stance visualizations
 def show_plots(
     input_rgb_raw,
     input_rgb,
@@ -399,30 +402,25 @@ def show_plots(
     plt.show()
 
 
-
-# Renders the geometric metrics table.
+# Renders the geometric metrics table
 def draw_metrics_table(ax, metrics_data):
     ax.axis("off")
 
     headers = ["Feature", "WKF Reference", "User Value", "Difference", "Status", "Feedback"]
-    rows = [
-        [
+    rows = []
+    
+    for item in metrics_data:
+        rows.append([
             item.get("feature", ""),
             item.get("reference", ""),
             item.get("user", ""),
             item.get("difference", ""),
             item.get("status", ""),
             item.get("feedback", "")
-        ]
-        for item in metrics_data
-    ]
+        ])
 
-    table = ax.table(
-        cellText=rows,
-        colLabels=headers,
-        loc="center",
-        cellLoc="center"
-    )
+    # Simple table construction
+    table = ax.table(cellText=rows, colLabels=headers)
 
     table.auto_set_font_size(False)
     table.set_fontsize(10)
@@ -432,6 +430,7 @@ def draw_metrics_table(ax, metrics_data):
         if row == 0:
             cell.set_text_props(weight="bold")
 
+    # Color Coding
     status_colors = {
         "good": "#b6e3b6",
         "warning": "#ffd89e",
@@ -441,6 +440,7 @@ def draw_metrics_table(ax, metrics_data):
     for idx, item in enumerate(metrics_data, start=1):
         status = str(item.get("status", "")).strip().lower()
         color = status_colors.get(status)
+
         if color is not None:
             table[(idx, 4)].set_facecolor(color)
 
@@ -451,27 +451,30 @@ def draw_metrics_table(ax, metrics_data):
                 table[(idx, col)].set_facecolor("#55B5CF")
 
 
-# Calculates the leg spread angle using pelvis and foot points.
+# Calculates the leg spread angle using pelvis and foot points
 def calculate_leg_spread_angle(pelvis_point, left_foot_point, right_foot_point):
     pelvis = np.array(pelvis_point, dtype=float)
     left_foot = np.array(left_foot_point, dtype=float)
     right_foot = np.array(right_foot_point, dtype=float)
 
+    # Convert poins to Vectors
     vec_left = left_foot - pelvis
     vec_right = right_foot - pelvis
 
+    # Calculate Lengths |v1| , |v2|
     left_norm = np.linalg.norm(vec_left)
     right_norm = np.linalg.norm(vec_right)
     if left_norm == 0 or right_norm == 0:
         return 0.0
 
+    # Dot Product Formula
     cos_angle = np.dot(vec_left, vec_right) / (left_norm * right_norm)
     cos_angle = np.clip(cos_angle, -1.0, 1.0)
     angle_rad = np.arccos(cos_angle)
     return float(np.degrees(angle_rad))
 
 
-# Calculates silhouette height from the mask bounding box.
+# Calculates silhouette height from the mask bounding box
 def calculate_silhouette_height(silhouette_mask):
     ys, xs = np.where(silhouette_mask > 0)
     if len(ys) == 0 or len(xs) == 0:
@@ -481,30 +484,38 @@ def calculate_silhouette_height(silhouette_mask):
     return max(bottom_y - top_y, 0)
 
 
-# Calculates pelvis height ratio within the silhouette bounds.
+# Calculates pelvis height ratio within the silhouette bounds
 def compute_pelvis_height_ratio(pelvis_point, silhouette_mask):
     ys, xs = np.where(silhouette_mask > 0)
+
     if len(ys) == 0 or len(xs) == 0:
         return 0.0
+    
     top_y = float(np.min(ys))
     bottom_y = float(np.max(ys))
     height = bottom_y - top_y
+
     if height <= 0:
         return 0.0
+    
     return float(pelvis_point[1] - top_y) / height
 
 
-# Compares stance width values and returns a metrics table row.
+# Compares stance width values and returns a metrics table row
 def compare_stance_width(ref_width, user_width, ref_height, user_height):
+    # Normalization
     ref_norm = (ref_width / ref_height) if ref_height > 0 else 0.0
     user_norm = (user_width / user_height) if user_height > 0 else 0.0
+
     diff = user_norm - ref_norm
+
     if ref_norm == 0:
         abs_diff = abs(diff)
         percent_diff = abs_diff
     else:
         percent_diff = (abs(diff) / ref_norm) * 100.0
 
+    # Status 
     if percent_diff <= 10:
         status = "Good"
     elif percent_diff <= 25:
@@ -512,6 +523,7 @@ def compare_stance_width(ref_width, user_width, ref_height, user_height):
     else:
         status = "Critical"
 
+    # Feedback
     if status == "Good":
         feedback = "Proper stance width"
     elif status == "Warning":
@@ -534,11 +546,12 @@ def compare_stance_width(ref_width, user_width, ref_height, user_height):
     }
 
 
-# Compares leg spread angles and returns a metrics table row.
+# Compares leg spread angles and returns a metrics table row
 def compare_leg_spread_angle(ref_angle, user_angle):
     diff = user_angle - ref_angle
     abs_diff = abs(diff)
 
+    # Status
     if abs_diff <= 10:
         status = "Good"
     elif abs_diff <= 25:
@@ -546,6 +559,7 @@ def compare_leg_spread_angle(ref_angle, user_angle):
     else:
         status = "Critical"
 
+    # Feedback
     if status == "Good":
         feedback = "Proper leg spread"
     elif status == "Warning":
@@ -568,17 +582,18 @@ def compare_leg_spread_angle(ref_angle, user_angle):
     }
 
 
-# Computes lateral pelvis offset from the foot midpoint.
+# Computes lateral pelvis offset from the foot midpoint
 def compute_pelvis_lateral_offset(pelvis_point, left_foot_point, right_foot_point):
     midpoint_x = (left_foot_point[0] + right_foot_point[0]) / 2.0
     return abs(pelvis_point[0] - midpoint_x)
 
 
-# Compares pelvis lateral offsets and returns a metrics table row.
+# Compares pelvis lateral offsets and returns a metrics table row
 def evaluate_pelvis_offset(reference_offset, user_offset):
     diff = user_offset - reference_offset
     abs_diff = abs(diff)
 
+    # Status
     if abs_diff <= 15:
         status = "Good"
     elif abs_diff <= 35:
@@ -586,6 +601,7 @@ def evaluate_pelvis_offset(reference_offset, user_offset):
     else:
         status = "Critical"
 
+    # Feedback
     if status == "Good":
         feedback = "Balanced pelvis alignment"
     elif status == "Warning":
@@ -603,7 +619,7 @@ def evaluate_pelvis_offset(reference_offset, user_offset):
     }
 
 
-# Computes normalized support triangle area from pelvis and feet points.
+# Computes normalized support triangle area from pelvis and feet points
 def compute_support_triangle_area(
     pelvis_point,
     left_foot_point,
@@ -612,9 +628,11 @@ def compute_support_triangle_area(
 ):
     if silhouette_height <= 0:
         return 0.0
+    
     x1, y1 = pelvis_point
     x2, y2 = left_foot_point
     x3, y3 = right_foot_point
+
     area = 0.5 * abs(
         x1 * (y2 - y3) +
         x2 * (y3 - y1) +
@@ -623,11 +641,12 @@ def compute_support_triangle_area(
     return float(area) / (float(silhouette_height) ** 2)
 
 
-# Compares support triangle areas and returns a metrics table row.
+# Compares support triangle areas and returns a metrics table row
 def evaluate_support_triangle_area(reference_area, user_area):
     diff = user_area - reference_area
     abs_diff = abs(diff)
 
+    # Status
     if abs_diff <= 0.08:
         status = "Good"
     elif abs_diff <= 0.18:
@@ -635,6 +654,7 @@ def evaluate_support_triangle_area(reference_area, user_area):
     else:
         status = "Critical"
 
+    # Feedback
     if status == "Good":
         feedback = "Stable support base"
     elif status == "Warning":
@@ -652,11 +672,12 @@ def evaluate_support_triangle_area(reference_area, user_area):
     }
 
 
-# Compares pelvis height ratios and returns a metrics table row.
+# Compares pelvis height ratios and returns a metrics table row
 def evaluate_pelvis_height_ratio(reference_ratio, user_ratio):
     diff = user_ratio - reference_ratio
     abs_diff = abs(diff)
 
+    # Status
     if abs_diff <= 0.08:
         status = "Good"
     elif abs_diff <= 0.18:
@@ -664,6 +685,7 @@ def evaluate_pelvis_height_ratio(reference_ratio, user_ratio):
     else:
         status = "Critical"
 
+    # Feedback
     if status == "Good":
         feedback = "Proper pelvis height"
     elif status == "Warning":
@@ -681,28 +703,31 @@ def evaluate_pelvis_height_ratio(reference_ratio, user_ratio):
     }
 
 
-# Computes left-right leg symmetry ratio.
+# Computes left-right leg symmetry ratio
 def compute_leg_symmetry_ratio(pelvis_point, left_foot_point, right_foot_point):
     left_dist = np.linalg.norm(
         np.array(left_foot_point, dtype=float) -
         np.array(pelvis_point, dtype=float)
     )
+
     right_dist = np.linalg.norm(
         np.array(right_foot_point, dtype=float) -
         np.array(pelvis_point, dtype=float)
     )
+
     if right_dist == 0:
         return 0.0
     return float(left_dist / right_dist)
 
 
-# Compares leg symmetry ratios and returns a metrics table row.
+# Compares leg symmetry ratios and returns a metrics table row
 def evaluate_leg_symmetry_ratio(reference_ratio, user_ratio):
     if reference_ratio == 0:
         symmetry_deviation = 0.0
     else:
         symmetry_deviation = abs(1 - (user_ratio / reference_ratio))
 
+    # Status
     if symmetry_deviation <= 0.20:
         status = "Good"
     elif symmetry_deviation <= 0.40:
@@ -710,6 +735,7 @@ def evaluate_leg_symmetry_ratio(reference_ratio, user_ratio):
     else:
         status = "Critical"
 
+    # Feedback
     if status == "Good":
         feedback = "Balanced leg distribution"
     elif status == "Warning":
@@ -727,9 +753,10 @@ def evaluate_leg_symmetry_ratio(reference_ratio, user_ratio):
     }
 
 
-# Computes stability index from metric differences.
+# Computes stability index from metric differences
 def compute_stability_index(metrics_dictionary):
-    # Thresholds align with the warning bounds for each metric.
+
+    # Thresholds - Maximum acceptable Deviations
     thresholds = {
         "stance_width": 0.25,
         "leg_spread": 25.0,
@@ -739,6 +766,7 @@ def compute_stability_index(metrics_dictionary):
         "leg_symmetry": 0.25
     }
 
+    # Assigned Weights
     weights = {
         "stance_width": 0.20,
         "leg_spread": 0.20,
@@ -765,7 +793,7 @@ def compute_stability_index(metrics_dictionary):
     return max(min(stability_index, 100.0), 0.0)
 
 
-# Evaluates the stability index and returns a metrics table row.
+# Evaluates the stability index and returns a metrics table row
 def evaluate_stability_index(stability_index):
     if stability_index >= 80:
         status = "Good"
@@ -787,20 +815,24 @@ def evaluate_stability_index(stability_index):
     }
 
 
-# Shows the final comparison template.
+# Shows the final comparison template
 def show_template_figure(ref_rgb, user_rgb, stance_label, metrics_data):
+    # Figure
     fig = plt.figure(figsize=(18, 10))
+    # Layout
     grid = fig.add_gridspec(2, 2, height_ratios=[3, 2])
     ax_ref = fig.add_subplot(grid[0, 0])
     ax_user = fig.add_subplot(grid[0, 1])
     ax_table = fig.add_subplot(grid[1, :])
 
+    # Resize Image
     common_h = min(ref_rgb.shape[0], user_rgb.shape[0])
     ref_w = int(ref_rgb.shape[1] * (common_h / ref_rgb.shape[0]))
     user_w = int(user_rgb.shape[1] * (common_h / user_rgb.shape[0]))
     ref_view = cv2.resize(ref_rgb, (ref_w, common_h), interpolation=cv2.INTER_AREA)
     user_view = cv2.resize(user_rgb, (user_w, common_h), interpolation=cv2.INTER_AREA)
 
+    # Display Figure
     ax_ref.imshow(ref_view)
     ax_ref.set_title("WKF Reference Stance")
     ax_ref.axis("off")
@@ -825,13 +857,14 @@ def show_template_figure(ref_rgb, user_rgb, stance_label, metrics_data):
         va="center",
         fontsize=11
     )
+
     draw_metrics_table(ax_table, metrics_data)
 
     fig.suptitle("Karate Posture Evaluation System", fontsize=16)
     plt.tight_layout()
     plt.show()
 
-
+# Save the Report
 def save_evaluation_report(stance_name, ref_rgb, user_rgb, metrics_data, out_dir=None):
    
     try:
@@ -845,7 +878,7 @@ def save_evaluation_report(stance_name, ref_rgb, user_rgb, metrics_data, out_dir
         ax_user = fig.add_subplot(grid[0, 1])
         ax_table = fig.add_subplot(grid[1, :])
 
-        # Resize images to a common height to keep layout consistent
+        # Resize images 
         common_h = min(ref_rgb.shape[0], user_rgb.shape[0])
         ref_w = int(ref_rgb.shape[1] * (common_h / ref_rgb.shape[0]))
         user_w = int(user_rgb.shape[1] * (common_h / user_rgb.shape[0]))
@@ -872,6 +905,7 @@ def save_evaluation_report(stance_name, ref_rgb, user_rgb, metrics_data, out_dir
         fig.savefig(out_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
         return out_path
+    
     except Exception:
         try:
             plt.close('all')
@@ -880,7 +914,7 @@ def save_evaluation_report(stance_name, ref_rgb, user_rgb, metrics_data, out_dir
         return None
 
 
-# Runs the full stance analysis pipeline.
+# Runs the full stance analysis pipeline
 def run_analysis(image_path, stance_name):
     input_bgr, input_bgr_raw = load_input_image(image_path)
     input_bgr, input_rgb = remove_mat_colors(input_bgr)
@@ -904,6 +938,7 @@ def run_analysis(image_path, stance_name):
     left_foot_point_full = (0, 0)
     right_foot_point_full = (0, 0)
 
+    # Feature Extraction
     if len(contours) > 0:
         contour_output = draw_contours(input_rgb_raw, contours, roi_y)
         center_node, waist_x = find_pelvis_center(silhouette_mask, roi_y)
@@ -944,10 +979,12 @@ def run_analysis(image_path, stance_name):
         "has_contours": len(contours) > 0
     }
 
-
+# Handle Command Line Inputs
 def parse_args():
     parser = argparse.ArgumentParser(description="Karate stance analysis")
+
     parser.add_argument("--image", help="Path to input image")
+
     parser.add_argument(
         "--stance",
         choices=[
@@ -961,6 +998,7 @@ def parse_args():
         ],
         help="Stance name"
     )
+
     parser.add_argument(
         "--ref-dir",
         help="Path to reference stances directory (optional). If omitted, uses the Reference Stances folder next to this script."
@@ -1008,11 +1046,14 @@ def prompt_if_missing(args):
 
 
 def main():
+    # Get User Inputs
     args = parse_args()
     image_path, stance_name = prompt_if_missing(args)
 
+    # Analyze User Image
     result = run_analysis(image_path, stance_name)
 
+    # Show Processing Stages
     show_plots(
         result["input_rgb_raw"],
         result["input_rgb"],
@@ -1026,12 +1067,13 @@ def main():
         result["has_contours"]
     )
 
-    # Determine reference directory: prefer CLI arg, else use project-relative folder
+    # Determine reference directory
     if getattr(args, "ref_dir", None):
         ref_dir = args.ref_dir
     else:
         ref_dir = os.path.join(os.path.dirname(__file__), "Reference Stances")
 
+    # Locate Reference Image
     ref_path = get_reference_path(stance_name, ref_dir)
     ref_result = None
     if os.path.exists(ref_path):
@@ -1043,15 +1085,27 @@ def main():
     else:
         print(f"Warning: Reference image not found at {ref_path}")
 
-    # Fallback: if reference analysis not available, use the user's input image for display
+    # Fallback
+
     if ref_result is not None:
-        ref_rgb = ref_result["stance_output"] if ref_result.get("has_contours") else ref_result["input_rgb_raw"]
+        if ref_result.get("has_contours"):
+            ref_rgb = ref_result["stance_output"]
+        else:
+            ref_rgb = ref_result["input_rgb_raw"]
+
     else:
         ref_rgb = result["input_rgb_raw"]
-    user_rgb = result["stance_output"] if result["has_contours"] else result["input_rgb_raw"]
+
+
+    if result["has_contours"]:
+        user_rgb = result["stance_output"]
+    else:
+        user_rgb = result["input_rgb_raw"]
+
     stance_label = stance_name.replace("_", " ")
     metrics_data = []
-    if ref_result["has_contours"] and result["has_contours"]:
+
+    if ref_result is not None and ref_result["has_contours"] and result["has_contours"]:
         metrics_data.append(
             compare_stance_width(
                 ref_result["stance_width"],
@@ -1061,78 +1115,35 @@ def main():
             )
         )
 
-        ref_norm_width = (
-            ref_result["stance_width"] / ref_result["silhouette_height"]
-            if ref_result["silhouette_height"] > 0 else 0.0
-        )
-        user_norm_width = (
-            result["stance_width"] / result["silhouette_height"]
-            if result["silhouette_height"] > 0 else 0.0
-        )
+        if ref_result["silhouette_height"] > 0:
+            ref_norm_width = ref_result["stance_width"] / ref_result["silhouette_height"]
+        else:
+            ref_norm_width = 0.0
 
-        ref_angle = calculate_leg_spread_angle(
-            ref_result["center_node"],
-            ref_result["left_foot"],
-            ref_result["right_foot"]
-        )
-        user_angle = calculate_leg_spread_angle(
-            result["center_node"],
-            result["left_foot"],
-            result["right_foot"]
-        )
+        if result["silhouette_height"] > 0:
+            user_norm_width = result["stance_width"] / result["silhouette_height"]
+        else:
+            user_norm_width = 0.0
+
+        ref_angle = calculate_leg_spread_angle(ref_result["center_node"],ref_result["left_foot"],ref_result["right_foot"])
+        user_angle = calculate_leg_spread_angle(result["center_node"],result["left_foot"],result["right_foot"])
         metrics_data.append(compare_leg_spread_angle(ref_angle, user_angle))
-
-        ref_offset = compute_pelvis_lateral_offset(
-            ref_result["center_node"],
-            ref_result["left_foot"],
-            ref_result["right_foot"]
-        )
-        user_offset = compute_pelvis_lateral_offset(
-            result["center_node"],
-            result["left_foot"],
-            result["right_foot"]
-        )
+        
+        ref_offset = compute_pelvis_lateral_offset(ref_result["center_node"],ref_result["left_foot"],ref_result["right_foot"])
+        user_offset = compute_pelvis_lateral_offset(result["center_node"],result["left_foot"],result["right_foot"])
         metrics_data.append(evaluate_pelvis_offset(ref_offset, user_offset))
-
-        ref_area = compute_support_triangle_area(
-            ref_result["center_node"],
-            ref_result["left_foot"],
-            ref_result["right_foot"],
-            ref_result["silhouette_height"]
-        )
-        user_area = compute_support_triangle_area(
-            result["center_node"],
-            result["left_foot"],
-            result["right_foot"],
-            result["silhouette_height"]
-        )
+        
+        ref_area = compute_support_triangle_area(ref_result["center_node"],ref_result["left_foot"],ref_result["right_foot"],ref_result["silhouette_height"])
+        user_area = compute_support_triangle_area(result["center_node"],result["left_foot"],result["right_foot"],result["silhouette_height"])
         metrics_data.append(evaluate_support_triangle_area(ref_area, user_area))
 
-        ref_pelvis_ratio = compute_pelvis_height_ratio(
-            ref_result["center_node"],
-            ref_result["silhouette_mask"]
-        )
-        user_pelvis_ratio = compute_pelvis_height_ratio(
-            result["center_node"],
-            result["silhouette_mask"]
-        )
-        metrics_data.append(
-            evaluate_pelvis_height_ratio(ref_pelvis_ratio, user_pelvis_ratio)
-        )
+        ref_pelvis_ratio = compute_pelvis_height_ratio(ref_result["center_node"],ref_result["silhouette_mask"])
+        user_pelvis_ratio = compute_pelvis_height_ratio(result["center_node"],result["silhouette_mask"])
+        metrics_data.append(evaluate_pelvis_height_ratio(ref_pelvis_ratio, user_pelvis_ratio))
 
-        ref_leg_sym = compute_leg_symmetry_ratio(
-            ref_result["center_node"],
-            ref_result["left_foot"],
-            ref_result["right_foot"]
-        )
-        user_leg_sym = compute_leg_symmetry_ratio(
-            result["center_node"],
-            result["left_foot"],
-            result["right_foot"]
-        )
-        metrics_data.append(
-            evaluate_leg_symmetry_ratio(ref_leg_sym, user_leg_sym)
-        )
+        ref_leg_sym = compute_leg_symmetry_ratio(ref_result["center_node"],ref_result["left_foot"],ref_result["right_foot"])
+        user_leg_sym = compute_leg_symmetry_ratio(result["center_node"],result["left_foot"],result["right_foot"])
+        metrics_data.append(evaluate_leg_symmetry_ratio(ref_leg_sym, user_leg_sym))
 
         stability_inputs = {
             "stance_width": user_norm_width - ref_norm_width,
@@ -1142,13 +1153,17 @@ def main():
             "pelvis_height": user_pelvis_ratio - ref_pelvis_ratio,
             "leg_symmetry": user_leg_sym - ref_leg_sym
         }
+
+        # Stability Index Computation
         stability_index = compute_stability_index(stability_inputs)
         metrics_data.append(evaluate_stability_index(stability_index))
 
+    # Save Report
     report_path = save_evaluation_report(stance_name, ref_rgb, user_rgb, metrics_data)
     if report_path:
         print(f"Saved evaluation report: {report_path}")
 
+    # Show Final Report
     show_template_figure(ref_rgb, user_rgb, stance_label, metrics_data)
 
 
