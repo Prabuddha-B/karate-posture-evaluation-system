@@ -420,13 +420,20 @@ def draw_metrics_table(ax, metrics_data):
         ])
 
     # Simple table construction
-    table = ax.table(cellText=rows, colLabels=headers)
+    table = ax.table(
+        cellText=rows,
+        colLabels=headers,
+        cellLoc="center",
+        colLoc="center",
+        loc="center"
+    )
 
     table.auto_set_font_size(False)
     table.set_fontsize(10)
     table.scale(1.2, 2.0)
 
     for (row, col), cell in table.get_celld().items():
+        cell.set_text_props(ha="center", va="center")
         if row == 0:
             cell.set_text_props(weight="bold")
 
